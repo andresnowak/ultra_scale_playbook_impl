@@ -21,3 +21,13 @@ For gather we can say this is similar to broadcast, but the difference is now we
 And for all gather the difference is that now instead al ranks will have a container list and everyone will gather the information of all ranks
 
 (Here in NCCL all gather will also behave in ring structure from what I understand)
+
+
+## Citations
+```bibtex
+@misc{ultrascale_playbook,
+      title={The Ultra-Scale Playbook: Training LLMs on GPU Clusters},
+      author={Nouamane Tazi, Ferdinand Mom, Haojun Zhao, Phuc Nguyen, Mohamed Mekkouri, Leandro Werra, Thomas Wolf},
+      year={2025},
+}
+```
