@@ -1,0 +1,1 @@
+torchrun --nnodes=1 --nproc-per-node=4 parallel_programming.py 
