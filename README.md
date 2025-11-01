@@ -77,6 +77,59 @@ So an All Reduce can be broken down into a Reduce Scatter followed by an All gat
 ### Barrier
 This is a simple operation to synchronize all nodes. A barrier is not lifted until all nodes have reached the barrier, and only then after this happens are the nodes allowed to continue
 
+# Training parallelism
+
+## Data parallelism
+
+The idea of data parallelism is that we can have our global batch size divided between gpus, each gpu will compute a micro batch size.
+
+So a very naive way is that we first do forward, then backward, then an all reduce to accumulate the gradients from all the gpus and then do the optimization step.
+
+**NOTE:** If your loss reduction is a sum, when doing gradient accumulation and accumulating the gradients between gpus you don't do an average, but if your loss reduction is a mean then after accumulating the gradient between gpus you should average by the world size so as to be mathematically equivalent (also divide the loss by the amount of accumulation steps).
+
+
+### First optimization: Overlapping communication and computation
+So we said we have to do first forward, then backward and then the all reduce (gradient synchronization, this is communication), so can we overlap the compuation and communication? the answer is yes.
+
+By using the `register_backward_hook`, it issues an all-reduce operation as soon as the gradient for that parameter is ready, while the gradients for other parameters are still being computed (remember the gpu can do fast context switches, so while it waits for some data it can still continue working and do these switches pretty fast)
+
+```py
+    def register_backward_hook(self, hook):
+        """
+        Registers a backward hook for all parameters of the model that require
+        gradients.
+        """
+        for p in self.module.parameters():
+            if p.requires_grad:
+                p.register_post_accumulate_grad_hook(hook)
+```
+
+Overlapping the computation and communication reduces the time
+spent waiting for gradient synchronization across the entire model.
+
+### Second optimization: Bucket Gradient
+GPU operations are more efficient when running on bigger tensors than doing multiple smaller tensors (as we have to issue multiple kernels (overhead)) and this is also true for communication operations. So here what we can do is isntead group gradients into "buckets" and launch a single all-reduce for for all the gradients in a buckets instead of doing independent all-reduce for each gradient (Here the buckets are done per size not per layer of the model, so we can have gradients from multiple layers in this case)
+
+- So here the idea is we will work in the Bucket manager with one gradient type (lets say float32). 
+- Then we have our list of buckets and into each bucket we will add all the params that can fit into our bucket (based on number of values)
+- Then for each bucket we will have a very big gradient, and each parmeters `main_grad` (we create this variable) will have a view (pointer) into the part it coresponds to it in the big grad tensor
+
+So now first we do our backward graph computation and each time we do finish the grad accumulation for one parameter we mark it as ready in the bucket manager. Then if all parameters are ready in that bucket we fire all reduce async, and the backward calls in the computational graph continue. Then finally when all backwards finish we wait for all buckets to finish, and then we copy from `param.main_grad` to `param.grad`
+
+
+So in this case we had to things, we overlapped communication and operations, and we did bigger operations instead of launching many small operations
+
+
+### Third optimization: Interplay with gradient accumulation
+
+When combining gradient accumulation with data parallelism, we have to be careful when we want to synchronize gradients.
+
+In a naive version, an all-reduce operation is automatically trigerred after each backward pass duing the gradient accumulation. This is suboptimal as we have to pay the communication overhead each time, so instead what we can do is do the all reduce after the final step. This has the same effect and we instead reduce overhead.
+
+**NOTE:** When performing communication operations, tensors must be contingous in memory to avoid redundant memory copies. To perform this optimally, we often preallocate continous bufferes fo the size of the activation or models parameters specifically for the communciation. This speeds communication, but it also contributes to peak memory useage during training
+**NOTE 2:** I think doing sync until the final step uses more peak memory, becassue we have to maintain our grad buffers for the duration of the gradient accumulation (as this memory is not freed until we do the last step)
+
+
 ## Citations
 ```bibtex
 @misc{ultrascale_playbook,
