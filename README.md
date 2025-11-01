@@ -80,6 +80,7 @@ This is a simple operation to synchronize all nodes. A barrier is not lifted unt
 # Training parallelism
 
 ## Data parallelism
+[Good blog](https://siboehm.com/articles/22/data-parallel-training)
 
 The idea of data parallelism is that we can have our global batch size divided between gpus, each gpu will compute a micro batch size.
 
